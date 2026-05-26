@@ -425,15 +425,12 @@ Run:
 docker run --rm --network host se-site-control \
   python se100k_site_control.py \
   --host 172.16.2.85 \
+  --port 1502 \
   --units 1,2,3,4,5 \
   --leader-unit 1 \
   --timeout 15 \
   --debug
 ```
-
-`--network host` is recommended because the container is a Modbus TCP client connecting out to the inverter.
-
-You do not need to publish port `1502` with `-p`, because the inverter listens on `1502`; the container only connects outbound.
 
 ## Important safety notes
 
