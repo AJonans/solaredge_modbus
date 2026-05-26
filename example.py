@@ -25,7 +25,6 @@ if __name__ == "__main__":
     values = {}
     values = inverter.read_all()
     meters = inverter.meters()
-
     batteries = inverter.batteries()
     values["meters"] = {}
     values["batteries"] = {}
