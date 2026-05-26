@@ -8,7 +8,7 @@ import sys
 import time
 from typing import Optional, Dict, Any, List, Tuple
 
-import solaredge_modbus
+import SE100K_modbus as solaredge_modbus
 
 
 DEFAULT_HOST = "172.16.2.85"
