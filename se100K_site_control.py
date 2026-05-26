@@ -11,12 +11,12 @@ from typing import Optional, Dict, Any, List, Tuple
 import SE100K_modbus as solaredge_modbus
 
 
-DEFAULT_HOST = "172.16.2.85"
-DEFAULT_PORT = 1502
+DEFAULT_HOST = "xxx.xxx.xxx.xxx"  # Put your leader inverter's IP address here
+DEFAULT_PORT = 1502 # SolarEdge Modbus TCP port, usually 1502
 
 # Your topology defaults
-DEFAULT_UNITS = "1,2,3,4,5"
-DEFAULT_LEADER_UNIT = 1
+DEFAULT_UNITS = "1,2,3,4,5" # Comma-separated Modbus unit IDs for all inverters in the site, including leader. Example: "1,2,3,4,5"
+DEFAULT_LEADER_UNIT = 1 # Modbus unit ID of the leader inverter.
 
 # SolarEdge power-control setup values
 ADVANCED_POWER_CONTROL_ENABLED = 1
@@ -34,7 +34,7 @@ EXPORT_CONTROL_MODE_DIRECT_WITH_NEGATIVE_SITE_LIMIT = (
 EXPORT_CONTROL_LIMIT_MODE_TOTAL = 0
 
 # Your normal site export limit
-DEFAULT_FULL_EXPORT_LIMIT_W = 499000.0
+DEFAULT_FULL_EXPORT_LIMIT_W = 499000.0 # Set this to your normal export limit in watts. This is used when you want to restore normal export after testing export blocking or minimum import modes.
 
 
 def parse_args():
@@ -108,7 +108,7 @@ def parse_args():
             "Examples: "
             "--set-export-limit 499000 restores normal export limit; "
             "--set-export-limit 0 blocks export; "
-            "--set-export-limit -10000 requires at least 10 kW grid import."
+            "--set-export-limit -10000 requires at least 10 kW grid import and blocks export."
         ),
     )
 
