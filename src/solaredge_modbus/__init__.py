@@ -1,3 +1,5 @@
+# All changed made respecting SE100K requirements for Synergy compatibility, including adjustments to register addresses, data types, and word order for specific registers related to reactive power control and export control settings, as well as optimizations for handling meter DIDs based on a base address and offsets to accommodate different Synergy configurations.
+
 import enum
 import time
 
@@ -68,7 +70,7 @@ class registerDataType(enum.Enum):
     UINT32 = 2
     UINT64 = 3
     INT16 = 4
-    SCALE = 4
+    SCALE = 10
     ACC32 = 5
     FLOAT32 = 6
     SEFLOAT = 7
@@ -174,10 +176,22 @@ STOREDGE_CHARGE_DISCHARGE_MODE = {
     7: "Maximize self consumption",
 }
 
+#METER_REGISTER_OFFSETS = [
+#    0x0,
+#    0xae,
+#    0x15c
+#]
+
+# SE100K / 3-unit Synergy shift = +70 decimal = 0x46
+# Use 0x00 for normal inverter
+# Use 0x32 for 2-unit Synergy
+# Use 0x46 for 3-unit Synergy / SE100K
+METER_SYNERGY_SHIFT = 0x46
+
 METER_REGISTER_OFFSETS = [
-    0x0,
-    0xae,
-    0x15c
+    0x0 + METER_SYNERGY_SHIFT,
+    0xae + METER_SYNERGY_SHIFT,
+    0x15c + METER_SYNERGY_SHIFT,
 ]
 
 BATTERY_REGISTER_OFFSETS = [
@@ -323,28 +337,32 @@ class SolarEdge:
         try:
             if dtype == registerDataType.INT16:
                 decoded = data.decode_16bit_int()
+            elif dtype == registerDataType.SCALE:
+                decoded = data.decode_16bit_int()
             elif dtype == registerDataType.INT32:
                 decoded = data.decode_32bit_int()
             elif dtype == registerDataType.UINT16:
                 decoded = data.decode_16bit_uint()
-            elif (dtype == registerDataType.UINT32 or
-                  dtype == registerDataType.ACC32):
+            elif dtype == registerDataType.UINT32 or dtype == registerDataType.ACC32:
                 decoded = data.decode_32bit_uint()
             elif dtype == registerDataType.UINT64:
                 decoded = data.decode_64bit_uint()
-            elif (dtype == registerDataType.FLOAT32 or
-                  dtype == registerDataType.SEFLOAT):
+            elif dtype == registerDataType.FLOAT32 or dtype == registerDataType.SEFLOAT:
                 decoded = data.decode_32bit_float()
             elif dtype == registerDataType.STRING:
-                decoded = data.decode_string(length * 2).decode(encoding="utf-8", errors="ignore").replace("\x00", "").rstrip()
+                decoded = data.decode_string(length * 2).decode(
+                    encoding="utf-8", errors="ignore"
+                ).replace("\x00", "").rstrip()
             else:
                 raise NotImplementedError(dtype)
+
             if decoded == SUNSPEC_NOTIMPLEMENTED[dtype.name]:
                 return vtype(False)
             elif decoded != decoded:
                 return vtype(False)
             else:
                 return vtype(decoded)
+
         except NotImplementedError:
             raise
 
@@ -444,16 +462,13 @@ class SolarEdge:
         return self._write(self.registers[key], data)
 
     def read_all(self, rtype=registerType.HOLDING):
-        registers = {k: v for k, v in self.registers.items() if (v[2] == rtype)}
+        registers = {k: v for k, v in self.registers.items() if v[2] == rtype}
         results = {}
 
-        for batch in range(1, len(registers)):
-            register_batch = {k: v for k, v in registers.items() if (v[7] == batch)}
-
-            if not register_batch:
-                break
-
-            results.update(self._read_all(register_batch, rtype))
+        for batch in sorted(set(v[7] for v in registers.values())):
+            register_batch = {k: v for k, v in registers.items() if v[7] == batch}
+            if register_batch:
+                results.update(self._read_all(register_batch, rtype))
 
         return results
 
@@ -467,10 +482,31 @@ class Inverter(SolarEdge):
         super().__init__(*args, **kwargs)
 
         # A dictionary to hold registers that require different wordorder
+#        self.little_endian_registers = {
+#            0xf700,  # export_control_mode
+#            0xf701,  # export_control_limit_mode
+#            0xf702,  # export_control_site_limit
+#            0xe004,  # storage_control_mode
+#            0xe005,  # storage_ac_charge_policy
+#            0xe006,  # storage_ac_charge_limit
+#            0xe008,  # storage_backup_reserved_setting
+#            0xe00a,  # storage_default_mode
+#            0xe00B,  # rc_cmd_timeout
+#            0xe00d,  # rc_cmd_mode
+#            0xe00e,  # rc_charge_limit
+#            0xe010   # rc_discharge_limit
+#        }
+
+        # A dictionary to hold registers that require different wordorder modified to include reactive power control registers
         self.little_endian_registers = {
+            0xf104,  # reactive_power_config
+            0xf106,  # reactive_power_response_time
+            0xf142,  # advanced_power_control_enable
+
             0xf700,  # export_control_mode
             0xf701,  # export_control_limit_mode
             0xf702,  # export_control_site_limit
+
             0xe004,  # storage_control_mode
             0xe005,  # storage_ac_charge_policy
             0xe006,  # storage_ac_charge_limit
@@ -542,19 +578,44 @@ class Inverter(SolarEdge):
 
             "rrcr_state": (0xf000, 1, registerType.HOLDING, registerDataType.UINT16, int, "RRCR State", "", 3),
             "active_power_limit": (0xf001, 1, registerType.HOLDING, registerDataType.UINT16, int, "Active Power Limit", "%", 3),
-            "cosphi": (0xf002, 2, registerType.HOLDING, registerDataType.FLOAT32, int, "CosPhi", "", 3),
+#            "cosphi": (0xf002, 2, registerType.HOLDING, registerDataType.FLOAT32, int, "CosPhi", "", 3),
+            #Changed from int to float for better handling of values between -1 and 1, and to match the FLOAT32 data type
+            "cosphi": ( 
+                0xf002, 2, registerType.HOLDING, registerDataType.FLOAT32,
+                float, "CosPhi", "", 3
+            ),
 
             "commit_power_control_settings": (0xf100, 1, registerType.HOLDING, registerDataType.INT16, int, "Commit Power Control Settings", "", 4),
             "restore_power_control_default_settings": (0xf101, 1, registerType.HOLDING, registerDataType.INT16, int, "Restore Power Control Default Settings", "", 4),
 
-            "reactive_power_config": (0xf103, 2, registerType.HOLDING, registerDataType.INT32, int, "Reactive Power Config", REACTIVE_POWER_CONFIG_MAP, 4),
-            "reactive_power_response_time": (0xf105, 2, registerType.HOLDING, registerDataType.UINT32, int, "Reactive Power Response Time", "ms", 4),
+#            "reactive_power_config": (0xf103, 2, registerType.HOLDING, registerDataType.INT32, int, "Reactive Power Config", REACTIVE_POWER_CONFIG_MAP, 4),
+#            "reactive_power_response_time": (0xf105, 2, registerType.HOLDING, registerDataType.UINT32, int, "Reactive Power Response Time", "ms", 4),
+            # Changed register addresses from 0xf103 and 0xf105 to 0xf104 and 0xf106 respectively, to match the correct register mapping for reactive power control settings
+            "reactive_power_config": (
+                0xf104, 2, registerType.HOLDING, registerDataType.INT32,
+                int, "Reactive Power Config", REACTIVE_POWER_CONFIG_MAP, 4
+            ),
 
-            "advanced_power_control_enable": (0xf142, 2, registerType.HOLDING, registerDataType.UINT16, int, "Advanced Power Control Enable", "", 4),
+            "reactive_power_response_time": (
+                0xf106, 2, registerType.HOLDING, registerDataType.UINT32,
+                int, "Reactive Power Response Time", "ms", 4
+            ),
+
+#            "advanced_power_control_enable": (0xf142, 2, registerType.HOLDING, registerDataType.UINT16, int, "Advanced Power Control Enable", "", 4),
+            # Changed data type from UINT16 to INT32 for better handling of potential future values and to match the register's expected data type
+            "advanced_power_control_enable": (
+                0xf142, 2, registerType.HOLDING, registerDataType.INT32,
+                int, "Advanced Power Control Enable", "", 4
+            ),
 
             "export_control_mode": (0xf700, 1, registerType.HOLDING, registerDataType.UINT16, int, "Export Control Mode", "", 5),
             "export_control_limit_mode": (0xf701, 1, registerType.HOLDING, registerDataType.UINT16, int, "Export Control Limit Mode", EXPORT_CONTROL_LIMIT_MAP, 5),
-            "export_control_site_limit": (0xf702, 2, registerType.HOLDING, registerDataType.FLOAT32, int, "Export Control Site Limit", "W", 5),
+#            "export_control_site_limit": (0xf702, 2, registerType.HOLDING, registerDataType.FLOAT32, int, "Export Control Site Limit", "W", 5),
+            #Changed data type from int to float for better handling of values with decimal points, and to match the FLOAT32 data type of the register
+            "export_control_site_limit": (
+                0xf702, 2, registerType.HOLDING, registerDataType.FLOAT32,
+                float, "Export Control Site Limit", "W", 5
+            ),
 
             "storage_control_mode": (0xe004, 1, registerType.HOLDING, registerDataType.UINT16, int, "Storage Control Mode", "", 6),
             "storage_ac_charge_policy": (0xe005, 1, registerType.HOLDING, registerDataType.UINT16, int, "Storage AC Charge Policy", "", 6),
@@ -568,10 +629,21 @@ class Inverter(SolarEdge):
 
         }
 
+#        self.meter_dids = [
+#            (0x9cfc, 1, registerType.HOLDING, registerDataType.UINT16, int, "", "", 1),
+#            (0x9daa, 1, registerType.HOLDING, registerDataType.UINT16, int, "", "", 1),
+#            (0x9e59, 1, registerType.HOLDING, registerDataType.UINT16, int, "", "", 1)
+#        ]
+        # For SE100K 3-unit Synergy
+#        self.meter_dids = [
+#            (0x9d42, 1, registerType.HOLDING, registerDataType.UINT16, int, "", "", 1),
+#            (0x9df0, 1, registerType.HOLDING, registerDataType.UINT16, int, "", "", 1),
+#            (0x9e9e, 1, registerType.HOLDING, registerDataType.UINT16, int, "", "", 1),
+#        ]
+        # Changed and optimized meter DID register addresses to be generated based on a base address and offsets, allowing for easier scalability and maintenance when adding support for more meters or different Synergy configurations
         self.meter_dids = [
-            (0x9cfc, 1, registerType.HOLDING, registerDataType.UINT16, int, "", "", 1),
-            (0x9daa, 1, registerType.HOLDING, registerDataType.UINT16, int, "", "", 1),
-            (0x9e59, 1, registerType.HOLDING, registerDataType.UINT16, int, "", "", 1)
+            (0x9cfc + offset, 1, registerType.HOLDING, registerDataType.UINT16, int, "", "", 1)
+            for offset in METER_REGISTER_OFFSETS
         ]
 
         self.battery_dids = [
@@ -583,22 +655,31 @@ class Inverter(SolarEdge):
     def meters(self):
         meters = [self._read(v) for v in self.meter_dids]
 
+#        print(meters)
+#        print("meter DID reads:", meters)
+#        print("valid meter indexes:", [idx for idx, v in enumerate(meters) if v])
+#        print("all meter indexes:", list(enumerate(meters)))
+#        print({f"Meter{idx + 1}": Meter(offset=idx, parent=self) for idx, v in enumerate(meters) if v})
+
         return {f"Meter{idx + 1}": Meter(offset=idx, parent=self) for idx, v in enumerate(meters) if v}
 
     def batteries(self):
         batteries = [self._read(v) for v in self.battery_dids]
 
-        return {f"Battery{idx + 1}": Battery(offset=idx, parent=self) for idx, v in enumerate(batteries) if v != 255}
+        return {f"Battery{idx + 1}": Battery(offset=idx, parent=self) for idx, v in enumerate(batteries) if (v != 255 and v != 0)}
 
 class Meter(SolarEdge):
 
-    def __init__(self, offset=False, *args, **kwargs):
+    def __init__(self, offset=0, *args, **kwargs):
         self.model = f"Meter{offset + 1}"
         self.wordorder = Endian.BIG
 
         super().__init__(*args, **kwargs)
+#        print(f"Meter offset: {offset}")
 
         self.offset = METER_REGISTER_OFFSETS[offset]
+#        print(f"Initializing {self.model} with offset {hex(self.offset)}")
+
         self.registers = {
             "c_manufacturer": (0x9cbb + self.offset, 16, registerType.HOLDING, registerDataType.STRING, str, "Manufacturer", "", 1),
             "c_model": (0x9ccb + self.offset, 16, registerType.HOLDING, registerDataType.STRING, str, "Model", "", 1),
